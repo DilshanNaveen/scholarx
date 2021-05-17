@@ -14,6 +14,7 @@ import org.sefglobal.scholarx.util.ProgramState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -30,6 +31,9 @@ public class ProgramService {
 
     @Autowired
     private EmailUtil emailUtil;
+
+    @Autowired
+    private EmailService emailService;
 
     public ProgramService(ProgramRepository programRepository,
                           ProfileRepository profileRepository,
@@ -60,7 +64,6 @@ public class ProgramService {
      *
      * @param id which is the id of the filtering {@link Program}
      * @return {@link Program}
-     *
      * @throws ResourceNotFoundException if the requesting {@link Program} doesn't exist
      */
     public Program getProgramById(long id) throws ResourceNotFoundException {
@@ -93,14 +96,13 @@ public class ProgramService {
      * @param id      which is the {@link Program} to be updated
      * @param program which is the up-to-date object
      * @return the updated {@link Program}
-     *
      * @throws ResourceNotFoundException is thrown if the requesting {@link Program} doesn't exist
      */
     public Program updateProgram(long id, Program program) throws ResourceNotFoundException {
         Optional<Program> existingProgram = programRepository.findById(id);
         if (!existingProgram.isPresent()) {
             String msg = "Error, Program with id: " + id + " cannot be updated. " +
-                         "Program doesn't exist.";
+                    "Program doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -118,62 +120,35 @@ public class ProgramService {
      *
      * @param id which is the {@link Program} to be updated
      * @return the updated {@link Program}
-     *
      * @throws ResourceNotFoundException is thrown if the requesting {@link Program} doesn't exist
      */
     public Program updateState(long id) throws ResourceNotFoundException {
         Optional<Program> program = programRepository.findById(id);
-        List<Mentor> mentors = mentorRepository.findAllByProgramId(id);
-        List<Mentor> approvedMentors = mentorRepository.findAllByProgramIdAndState(id, EnrolmentState.APPROVED);
-        List<Mentee> mentees = menteeRepository.findAllByProgramId(id);
 
         Thread thread = new Thread(() -> {
             try {
                 switch (program.get().getState().next()) {
                     case MENTEE_APPLICATION:
-                        for (Mentor mentor : mentors) {
-                            Email email = new Email();
-                            email.setEmail(mentor.getProfile().getEmail());
-                            email.setSubject(program.get().getTitle());
-                            email.setMessage("You have been " + mentor.getState().name().toLowerCase());
-                            emailUtil.sendSimpleMessage(email);
-                        }
+                        sendMenteeApplicationEmails(id, program);
                         break;
                     case MENTEE_SELECTION:
-                        for (Mentor mentor : approvedMentors) {
-                            Email email = new Email();
-                            email.setEmail(mentor.getProfile().getEmail());
-                            email.setSubject(program.get().getTitle());
-                            email.setMessage("You can approve or reject your mentees by visiting the dashboard");
-                            emailUtil.sendSimpleMessage(email);
-                        }
+                        sendMenteeSelectionEmails(id, program);
                         break;
                     case ONGOING:
-                        for (Mentor mentor : approvedMentors) {
-                            Email email = new Email();
-                            email.setEmail(mentor.getProfile().getEmail());
-                            email.setSubject(program.get().getTitle());
-                            email.setMessage("You can check your mentees by visiting the dashboard");
-                            emailUtil.sendSimpleMessage(email);
-                        }
+                        sendOnGoingEmails(id, program);
                         break;
                     case MENTOR_CONFIRMATION:
-                        for (Mentee mentee : mentees) {
-                            Email email = new Email();
-                            email.setEmail(mentee.getProfile().getEmail());
-                            email.setSubject(program.get().getTitle());
-                            email.setMessage("You can check your mentor by visiting the dashboard");
-                            emailUtil.sendSimpleMessage(email);
-                        }
+                        sendMentorConfirmationEmails(id, program);
                         break;
                 }
-            }catch (Exception ignored){}
+            } catch (Exception ignored) {
+            }
         });
         thread.start();
 
         if (!program.isPresent()) {
             String msg = "Error, Program with id: " + id + " cannot be updated. " +
-                         "Program doesn't exist.";
+                    "Program doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -181,6 +156,43 @@ public class ProgramService {
         ProgramState nextState = program.get().getState().next();
         program.get().setState(nextState);
         return programRepository.save(program.get());
+    }
+
+    public void sendMenteeApplicationEmails(long id, Optional<Program> program) {
+        List<Mentor> mentors = mentorRepository.findAllByProgramId(id);
+
+        String message;
+        for (Mentor mentor : mentors) {
+            message = "You have been " + mentor.getState().name().toLowerCase();
+            emailService.sendEmail(mentor.getProfile().getEmail(), program.get().getTitle(), message);
+        }
+    }
+
+    public void sendMenteeSelectionEmails(long id, Optional<Program> program) {
+        List<Mentor> approvedMentors = mentorRepository.findAllByProgramIdAndState(id, EnrolmentState.APPROVED);
+
+        String message = "You can approve or reject your mentees by visiting the dashboard";
+        for (Mentor mentor : approvedMentors) {
+            emailService.sendEmail(mentor.getProfile().getEmail(), program.get().getTitle(), message);
+        }
+    }
+
+    public void sendOnGoingEmails(long id, Optional<Program> program) {
+        List<Mentor> approvedMentors = mentorRepository.findAllByProgramIdAndState(id, EnrolmentState.APPROVED);
+
+        String message = "You can check your mentees by visiting the dashboard";
+        for (Mentor mentor : approvedMentors) {
+            emailService.sendEmail(mentor.getProfile().getEmail(), program.get().getTitle(), message);
+        }
+    }
+
+    public void sendMentorConfirmationEmails(long id, Optional<Program> program) {
+        List<Mentee> mentees = menteeRepository.findAllByProgramId(id);
+
+        String message = "You can check your mentor by visiting the dashboard";
+        for (Mentee mentee : mentees) {
+            emailService.sendEmail(mentee.getProfile().getEmail(), program.get().getTitle(), message);
+        }
     }
 
     /**
@@ -193,7 +205,7 @@ public class ProgramService {
         Optional<Program> existingProgram = programRepository.findById(id);
         if (!existingProgram.isPresent()) {
             String msg = "Error, Program with id: " + id + " cannot be deleted. " +
-                         "Program doesn't exist.";
+                    "Program doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -208,9 +220,8 @@ public class ProgramService {
      * @param id     which is the Program id of the filtering {@link Mentor} objects
      * @param states which is the list of states that {@link Mentor} objects should be filtered from
      * @return {@link List} of {@link Mentor} objects
-     *
      * @throws ResourceNotFoundException if the requesting {@link Program} to filter
-     *                                  {@link Mentor} objects doesn't exist
+     *                                   {@link Mentor} objects doesn't exist
      */
     public List<Mentor> getAllMentorsByProgramId(long id, List<EnrolmentState> states)
             throws ResourceNotFoundException {
@@ -220,20 +231,19 @@ public class ProgramService {
             throw new ResourceNotFoundException(msg);
         }
         if (states == null || states.isEmpty()) {
-            return  mentorRepository.findAllByProgramId(id);
+            return mentorRepository.findAllByProgramId(id);
         } else {
-            return  mentorRepository.findAllByProgramIdAndStateIn(id, states);
+            return mentorRepository.findAllByProgramIdAndStateIn(id, states);
         }
     }
 
     /**
      * Retrieves all the {@link Mentee} objects filtered from {@link Program} {@code id}
      *
-     * @param id     which is the Program id of the filtering {@link Mentee} objects
+     * @param id which is the Program id of the filtering {@link Mentee} objects
      * @return {@link List} of {@link Mentee} objects
-     *
      * @throws ResourceNotFoundException if the requesting {@link Program} to filter
-     *                                  {@link Mentee} objects doesn't exist
+     *                                   {@link Mentee} objects doesn't exist
      */
     public List<Mentee> getAllMenteesByProgramId(long id)
             throws ResourceNotFoundException {
@@ -242,7 +252,7 @@ public class ProgramService {
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
-        return  menteeRepository.findAllByProgramId(id);
+        return menteeRepository.findAllByProgramId(id);
 
     }
 
@@ -253,24 +263,23 @@ public class ProgramService {
      * @param profileId which is the profile id of the applying user's {@link Profile}
      * @param mentor    which holds the data to be added
      * @return the created {@link Mentor}
-     *
      * @throws ResourceNotFoundException is thrown if the applying {@link Program} doesn't exist
      * @throws ResourceNotFoundException is thrown if the applying user's {@link Profile} doesn't exist
-     * @throws BadRequestException is thrown if the applying {@link Program} is
-     * not in the applicable {@link ProgramState}
+     * @throws BadRequestException       is thrown if the applying {@link Program} is
+     *                                   not in the applicable {@link ProgramState}
      */
     public Mentor applyAsMentor(long programId, long profileId, Mentor mentor)
             throws ResourceNotFoundException, BadRequestException {
         Optional<Program> optionalProgram = programRepository.findById(programId);
         if (!optionalProgram.isPresent()) {
             String msg = "Error, Unable to apply as a mentor. " +
-                         "Program with id: " + programId + " doesn't exist.";
+                    "Program with id: " + programId + " doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
         if (!ProgramState.MENTOR_APPLICATION.equals(optionalProgram.get().getState())) {
             String msg = "Error, Unable to apply as a mentor. " +
-                         "Program with id: " + programId + " is not in the applicable status.";
+                    "Program with id: " + programId + " is not in the applicable status.";
             log.error(msg);
             throw new BadRequestException(msg);
         }
@@ -278,7 +287,7 @@ public class ProgramService {
         Optional<Profile> optionalProfile = profileRepository.findById(profileId);
         if (!optionalProfile.isPresent()) {
             String msg = "Error, Unable to apply as a mentor. " +
-                         "Profile with id: " + profileId + " doesn't exist.";
+                    "Profile with id: " + profileId + " doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -295,7 +304,6 @@ public class ProgramService {
      * @param programId which is the id of the {@link Program}
      * @param profileId which is the id of the {@link Profile}
      * @return {@link Mentor}
-     *
      * @throws ResourceNotFoundException if the requesting {@link Mentor} doesn't exist
      */
     public Mentor getLoggedInMentor(long programId, long profileId)
@@ -303,7 +311,7 @@ public class ProgramService {
         Optional<Mentor> optionalMentor = mentorRepository.findByProfileIdAndProgramId(profileId, programId);
         if (!optionalMentor.isPresent()) {
             String msg = "Error, Mentor by profile id: " + profileId + " and " +
-                         "program id: " + programId + " doesn't exist.";
+                    "program id: " + programId + " doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -317,7 +325,6 @@ public class ProgramService {
      * @param programId which is the Program id of the {@link Mentor} to be updated
      * @param mentor    with the application and prerequisites of the mentor to be updated
      * @return the updated {@link Mentor}
-     *
      * @throws ResourceNotFoundException is thrown if the {@link Mentor} doesn't exist
      * @throws BadRequestException       if the {@link Mentor} is not in the valid state
      */
@@ -326,8 +333,8 @@ public class ProgramService {
         Optional<Mentor> optionalMentor = mentorRepository.findByProfileIdAndProgramId(profileId, programId);
         if (!optionalMentor.isPresent()) {
             String msg = "Error, Mentor by profile id: " + profileId + " and " +
-                         "program id: " + programId + " cannot be updated. " +
-                         "Mentor doesn't exist.";
+                    "program id: " + programId + " cannot be updated. " +
+                    "Mentor doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
@@ -338,7 +345,7 @@ public class ProgramService {
                 existingMentor.setApplication(mentor.getApplication());
             } else {
                 String msg = "Error, Application cannot be updated. " +
-                             "Mentor is not in a valid state.";
+                        "Mentor is not in a valid state.";
                 log.error(msg);
                 throw new BadRequestException(msg);
             }
@@ -349,7 +356,7 @@ public class ProgramService {
                     existingMentor.setPrerequisites(mentor.getPrerequisites());
                 } else {
                     String msg = "Error, Prerequisites cannot be updated. " +
-                                 "Mentor is not in a valid state.";
+                            "Mentor is not in a valid state.";
                     log.error(msg);
                     throw new BadRequestException(msg);
                 }
@@ -366,7 +373,6 @@ public class ProgramService {
      * @param menteeStates which is the list of states that {@link Mentee} objects should be
      *                     filtered from
      * @return {@link List} of {@link Mentor} objects
-     *
      * @throws NoContentException if the user hasn't applied for {@link Mentor} objects
      */
     public List<Mentor> getAppliedMentorsOfMentee(long programId, List<EnrolmentState> menteeStates, long profileId)
@@ -379,7 +385,7 @@ public class ProgramService {
         }
         if (menteeList.isEmpty()) {
             String msg = "Error, Mentee by program id: " + programId + " and " +
-                         "profile id: " + profileId + " doesn't exist.";
+                    "profile id: " + profileId + " doesn't exist.";
             log.error(msg);
             throw new NoContentException(msg);
         }
@@ -396,7 +402,6 @@ public class ProgramService {
      * @param programId which is the id of the {@link Program}
      * @param profileId which is the profile id of the {@link Mentee}
      * @return {@link Mentor} object
-     *
      * @throws ResourceNotFoundException if the {@link Program} doesn't exist
      */
     public Mentor getSelectedMentor(long programId, long profileId)
@@ -405,7 +410,7 @@ public class ProgramService {
                 .findAllByProgramIdAndProfileId(programId, profileId);
         if (menteeList.isEmpty()) {
             String msg = "Error, Mentee by program id: " + programId + " and " +
-                         "profile id: " + profileId + " doesn't exist.";
+                    "profile id: " + profileId + " doesn't exist.";
             log.error(msg);
             throw new ResourceNotFoundException(msg);
         }
